@@ -1,313 +1,180 @@
 #!/bin/bash
 
 #############################################
-# E.A.S.E.M - Monitoring Dashboard
-# Display real-time metrics from clients
+# E.A.S.E.M - Shared Utility Functions
+# Common functions used by master and agent
 #############################################
 
-# Source shared utilities
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHARED_DIR="$SCRIPT_DIR/../shared"
-CONFIG_FILE="$SCRIPT_DIR/config/easem-config.conf"
-CLIENTS_FILE="$SCRIPT_DIR/config/clients.list"
+# Color codes for output
+COLOR_RED='\033[0;31m'
+COLOR_GREEN='\033[0;32m'
+COLOR_YELLOW='\033[1;33m'
+COLOR_BLUE='\033[0;34m'
+COLOR_CYAN='\033[0;36m'
+COLOR_RESET='\033[0m'
 
-source "$SHARED_DIR/easem-utils.sh"
-source "$SHARED_DIR/easem-logger.sh"
-source "$SCRIPT_DIR/easem-commands.sh"
-
-# Load configuration
-if file_exists "$CONFIG_FILE"; then
-    source "$CONFIG_FILE"
-fi
-
-# Read client list
-read_clients() {
-    local clients=()
-    
-    if ! file_exists "$CLIENTS_FILE"; then
-        return 1
-    fi
-    
-    while IFS=':' read -r name user host port; do
-        # Skip comments and empty lines
-        [[ "$name" =~ ^#.*$ ]] && continue
-        [[ -z "$name" ]] && continue
-        
-        clients+=("$name:$user:$host:$port")
-    done < "$CLIENTS_FILE"
-    
-    echo "${clients[@]}"
+# Get current timestamp in readable format
+get_timestamp() {
+    date '+%Y-%m-%d %H:%M:%S'
 }
 
-# Check client online status
-check_client_status() {
-    local client_user=$1
-    local client_host=$2
-    local ssh_port=${3:-22}
+# Get timestamp for filenames (no spaces or special chars)
+get_timestamp_filename() {
+    date '+%Y%m%d_%H%M%S'
+}
+
+# Print colored message
+print_color() {
+    local color=$1
+    local message=$2
+    echo -e "${color}${message}${COLOR_RESET}"
+}
+
+# Print success message
+print_success() {
+    print_color "$COLOR_GREEN" "[SUCCESS] $1"
+}
+
+# Print error message
+print_error() {
+    print_color "$COLOR_RED" "[ERROR] $1"
+}
+
+# Print warning message
+print_warning() {
+    print_color "$COLOR_YELLOW" "[WARNING] $1"
+}
+
+# Print info message
+print_info() {
+    print_color "$COLOR_BLUE" "[INFO] $1"
+}
+
+# Check if command exists
+command_exists() {
+    command -v "$1" &> /dev/null
+}
+
+# Check if file exists
+file_exists() {
+    [[ -f "$1" ]]
+}
+
+# Check if directory exists
+dir_exists() {
+    [[ -d "$1" ]]
+}
+
+# Create directory if it doesn't exist
+ensure_dir() {
+    local dir_path=$1
+    if ! dir_exists "$dir_path"; then
+        mkdir -p "$dir_path"
+        print_success "Created directory: $dir_path"
+    fi
+}
+
+# Validate IP address format
+validate_ip() {
+    local ip=$1
+    local valid_ip_regex='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
     
-    if test_ssh_connection "$client_user" "$client_host" 3; then
-        echo "ONLINE"
+    if [[ $ip =~ $valid_ip_regex ]]; then
+        return 0
     else
-        echo "OFFLINE"
+        return 1
     fi
 }
 
-# Display single client metrics
-display_client_metrics() {
-    local client_name=$1
-    local client_user=$2
-    local client_host=$3
-    local ssh_port=${4:-22}
+# Test SSH connection to remote host
+test_ssh_connection() {
+    local user=$1
+    local host=$2
+    local timeout=${3:-5}  # Default 5 seconds
     
-    print_color "$COLOR_CYAN" "╔══════════════════════════════════════════════════╗"
-    print_color "$COLOR_CYAN" "║  Client: $client_name @ $client_host"
-    print_color "$COLOR_CYAN" "╚══════════════════════════════════════════════════╝"
-    
-    # Check status
-    local status
-    status=$(check_client_status "$client_user" "$client_host" "$ssh_port")
-    
-    if [[ "$status" == "ONLINE" ]]; then
-        print_success "Status: ONLINE"
-        echo ""
-        
-        # Get metrics
-        get_remote_metrics "$client_user" "$client_host" "$ssh_port" "simple"
+    if timeout "$timeout" ssh -o BatchMode=yes -o ConnectTimeout="$timeout" "$user@$host" "echo 'OK'" &>/dev/null; then
+        return 0
     else
-        print_error "Status: OFFLINE"
-        echo "Cannot retrieve metrics - client is not reachable"
-    fi
-    
-    echo ""
-}
-
-# Display all clients overview
-display_all_clients() {
-    local clients
-    IFS=' ' read -ra clients <<< "$(read_clients)"
-    
-    if [[ ${#clients[@]} -eq 0 ]]; then
-        print_warning "No clients configured"
-        echo "Add clients to: $CLIENTS_FILE"
-        echo "Format: client_name:username:hostname:port"
         return 1
     fi
-    
-    clear
-    print_color "$COLOR_CYAN" "╔════════════════════════════════════════════════════════╗"
-    print_color "$COLOR_CYAN" "║        E.A.S.E.M - System Monitoring Dashboard         ║"
-    print_color "$COLOR_CYAN" "╚════════════════════════════════════════════════════════╝"
-    echo ""
-    print_info "Total Clients: ${#clients[@]}"
-    print_info "Last Update: $(get_timestamp)"
-    echo ""
-    
-    # Display each client
-    for client_spec in "${clients[@]}"; do
-        IFS=':' read -r name user host port <<< "$client_spec"
-        display_client_metrics "$name" "$user" "$host" "$port"
-    done
-    
-    echo ""
-    print_color "$COLOR_YELLOW" "Press Ctrl+C to exit | Refresh in ${DASHBOARD_REFRESH_INTERVAL}s"
 }
 
-# Live dashboard with auto-refresh
-live_dashboard() {
-    print_info "Starting live dashboard (refresh every ${DASHBOARD_REFRESH_INTERVAL}s)"
-    echo "Press Ctrl+C to exit"
-    sleep 2
-    
-    while true; do
-        display_all_clients
-        sleep "$DASHBOARD_REFRESH_INTERVAL"
-    done
-}
-
-# Get quick metrics summary from client
-get_quick_metrics() {
-    local client_user=$1
-    local client_host=$2
-    local ssh_port=${3:-22}
-    
-    # Get metrics and parse key values
-    local metrics
-    metrics=$(ssh $SSH_OPTIONS -p "$ssh_port" "$client_user@$client_host" "cd ~/easem/agent && ./easem-collector.sh" 2>/dev/null)
-    
-    if [[ -z "$metrics" ]]; then
-        echo "N/A|N/A|N/A|N/A"
-        return 1
+# Get local IP address
+get_local_ip() {
+    # Get IP from WSL or native Linux
+    if command_exists ip; then
+        ip addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -n1
+    elif command_exists hostname; then
+        hostname -I | awk '{print $1}'
+    else
+        echo "127.0.0.1"
     fi
-    
-    # Extract CPU, Memory, Disk, and Uptime
-    local cpu=$(echo "$metrics" | grep "CPU Usage:" | awk '{print $3}')
-    local mem=$(echo "$metrics" | grep "Memory:" | awk -F'PERCENT:' '{print $2}' | cut -d'%' -f1)
-    local disk=$(echo "$metrics" | grep "Disk:" | awk -F'PERCENT:' '{print $2}' | cut -d'%' -f1)
-    local uptime=$(echo "$metrics" | grep "Uptime:" | cut -d':' -f2- | xargs)
-    
-    # Format output
-    echo "${cpu:-N/A}|${mem:-N/A}%|${disk:-N/A}%|${uptime:-N/A}"
 }
 
-# Show client list with metrics summary
-list_clients() {
-    local clients
-    IFS=' ' read -ra clients <<< "$(read_clients)"
-    
-    if [[ ${#clients[@]} -eq 0 ]]; then
-        print_warning "No clients configured"
-        return 1
+# Format bytes to human readable
+format_bytes() {
+    local bytes=$1
+    if (( bytes < 1024 )); then
+        echo "${bytes}B"
+    elif (( bytes < 1048576 )); then
+        echo "$(( bytes / 1024 ))KB"
+    elif (( bytes < 1073741824 )); then
+        echo "$(( bytes / 1048576 ))MB"
+    else
+        echo "$(( bytes / 1073741824 ))GB"
     fi
+}
+
+# Sanitize input (remove dangerous characters)
+sanitize_input() {
+    local input=$1
+    # Remove potentially dangerous characters
+    echo "$input" | sed 's/[;&|`$]//g'
+}
+
+# Check if running as root
+is_root() {
+    [[ $EUID -eq 0 ]]
+}
+
+# Parse JSON value (simple jq alternative if jq not available)
+parse_json_simple() {
+    local json=$1
+    local key=$2
+    echo "$json" | grep -o "\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | sed 's/.*":\s*"\(.*\)"/\1/'
+}
+
+# Show progress spinner
+show_spinner() {
+    local pid=$1
+    local message=${2:-"Working"}
+    local spin='-\|/'
+    local i=0
     
-    echo ""
-    print_color "$COLOR_CYAN" "╔════════════════════════════════════════════════════════════════════════════════════════════╗"
-    print_color "$COLOR_CYAN" "║                           E.A.S.E.M Client List & Status                                   ║"
-    print_color "$COLOR_CYAN" "╚════════════════════════════════════════════════════════════════════════════════════════════╝"
-    echo ""
-    
-    printf "%-12s %-10s %-18s %-8s %-10s %-10s %-18s\n" \
-        "CLIENT" "STATUS" "HOST" "CPU" "MEMORY" "DISK" "UPTIME"
-    printf "%-12s %-10s %-18s %-8s %-10s %-10s %-18s\n" \
-        "------" "------" "----" "---" "------" "----" "------"
-    
-    for client_spec in "${clients[@]}"; do
-        IFS=':' read -r name user host port <<< "$client_spec"
-        
-        # Check status
-        local status=$(check_client_status "$user" "$host" "$port")
-        
-        if [[ "$status" == "ONLINE" ]]; then
-            # Get quick metrics (silent - no progress messages)
-            local metrics=$(get_quick_metrics "$user" "$host" "$port")
-            IFS='|' read -r cpu mem disk uptime <<< "$metrics"
-            
-            # Prepare status text (we'll color it in the echo)
-            local status_text="ONLINE"
-            
-            # Determine memory color
-            local mem_color=""
-            if [[ "$mem" != "N/A"* ]] && [[ "$mem" =~ ^[0-9.]+% ]]; then
-                local mem_num=${mem%\%}
-                if (( $(echo "$mem_num > 90" | bc -l 2>/dev/null || echo 0) )); then
-                    mem_color="$COLOR_RED"
-                elif (( $(echo "$mem_num > 70" | bc -l 2>/dev/null || echo 0) )); then
-                    mem_color="$COLOR_YELLOW"
-                fi
-            fi
-            
-            # Determine disk color
-            local disk_color=""
-            if [[ "$disk" != "N/A"* ]] && [[ "$disk" =~ ^[0-9.]+% ]]; then
-                local disk_num=${disk%\%}
-                if (( $(echo "$disk_num > 90" | bc -l 2>/dev/null || echo 0) )); then
-                    disk_color="$COLOR_RED"
-                elif (( $(echo "$disk_num > 70" | bc -l 2>/dev/null || echo 0) )); then
-                    disk_color="$COLOR_YELLOW"
-                fi
-            fi
-            
-            # Truncate long uptime
-            if [[ ${#uptime} -gt 16 ]]; then
-                uptime="${uptime:0:16}.."
-            fi
-            
-            # Print with colors using echo for proper interpretation
-            printf "%-12s " "$name"
-            echo -ne "${COLOR_GREEN}${status_text}${COLOR_RESET}    "
-            printf "%-18s %-8s " "$host" "$cpu"
-            echo -ne "${mem_color}${mem}${COLOR_RESET}      "
-            echo -ne "${disk_color}${disk}${COLOR_RESET}        "
-            echo "$uptime"
-        else
-            # Offline client
-            printf "%-12s " "$name"
-            echo -ne "${COLOR_RED}OFFLINE${COLOR_RESET}   "
-            printf "%-18s %-8s %-10s %-10s %-18s\n" "$host" "-" "-" "-" "-"
-        fi
+    while kill -0 "$pid" 2>/dev/null; do
+        i=$(( (i+1) %4 ))
+        printf "\r${message}... ${spin:$i:1}"
+        sleep 0.1
     done
-    
-    echo ""
+    printf "\r${message}... Done!     \n"
 }
 
-# Show metrics for specific client
-show_client() {
-    local target_name=$1
-    local clients
-    IFS=' ' read -ra clients <<< "$(read_clients)"
-    
-    for client_spec in "${clients[@]}"; do
-        IFS=':' read -r name user host port <<< "$client_spec"
-        
-        if [[ "$name" == "$target_name" ]]; then
-            display_client_metrics "$name" "$user" "$host" "$port"
-            return 0
-        fi
-    done
-    
-    print_error "Client not found: $target_name"
-    return 1
-}
-
-# Show help
-show_help() {
-    cat <<EOF
-
-E.A.S.E.M Monitoring Dashboard
-
-USAGE:
-    ./easem-dashboard.sh [COMMAND] [OPTIONS]
-
-COMMANDS:
-    live                    Start live dashboard (auto-refresh)
-    list                    List all clients with quick metrics summary
-    show <client_name>      Show detailed metrics for specific client
-    all                     Show all clients once (no refresh)
-    help                    Show this help message
-
-EXAMPLES:
-    ./easem-dashboard.sh live              # Live auto-refreshing dashboard
-    ./easem-dashboard.sh list              # Quick overview of all clients
-    ./easem-dashboard.sh show laptop2      # Detailed view of laptop2
-    ./easem-dashboard.sh all               # All clients detailed (one-time)
-
-NOTES:
-    - 'list' command shows quick metrics: CPU, Memory, Disk usage, and Uptime
-    - Color coding: Green=Normal, Yellow=>70%, Red=>90%
-    - 'show' command displays full detailed metrics for one client
-    - 'live' refreshes every ${DASHBOARD_REFRESH_INTERVAL:-3} seconds
-
-EOF
-}
-
-# Main execution
-main() {
-    local command=${1:-"help"}
-    
-    case "$command" in
-        live)
-            live_dashboard
-            ;;
-        list)
-            list_clients
-            ;;
-        show)
-            show_client "$2"
-            ;;
-        all)
-            display_all_clients
-            ;;
-        help|--help|-h)
-            show_help
-            ;;
-        *)
-            print_error "Unknown command: $command"
-            show_help
-            exit 1
-            ;;
-    esac
-}
-
-# Run main function if script is executed directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+# Export functions so they can be used by other scripts
+export -f get_timestamp
+export -f get_timestamp_filename
+export -f print_color
+export -f print_success
+export -f print_error
+export -f print_warning
+export -f print_info
+export -f command_exists
+export -f file_exists
+export -f dir_exists
+export -f ensure_dir
+export -f validate_ip
+export -f test_ssh_connection
+export -f get_local_ip
+export -f format_bytes
+export -f sanitize_input
+export -f is_root
+export -f parse_json_simple
