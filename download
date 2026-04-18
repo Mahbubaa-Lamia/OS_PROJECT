@@ -1,0 +1,121 @@
+#!/bin/bash
+
+#############################################
+# E.A.S.E.M - System Metrics Collector
+# Collects system information for monitoring
+#############################################
+
+# Source shared utilities
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SHARED_DIR="$SCRIPT_DIR/../shared"
+source "$SHARED_DIR/easem-utils.sh"
+source "$SHARED_DIR/easem-logger.sh"
+
+# Collect CPU usage
+get_cpu_usage() {
+    # Get CPU usage percentage (1 second average)
+    top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1
+}
+
+# Collect memory information
+get_memory_info() {
+    local total used free percent
+    
+    # Get memory stats in MB
+    total=$(free -m | awk 'NR==2 {print $2}')
+    used=$(free -m | awk 'NR==2 {print $3}')
+    free=$(free -m | awk 'NR==2 {print $4}')
+    percent=$(awk "BEGIN {printf \"%.1f\", ($used/$total)*100}")
+    
+    echo "TOTAL:${total}MB,USED:${used}MB,FREE:${free}MB,PERCENT:${percent}%"
+}
+
+# Collect disk usage
+get_disk_usage() {
+    # Get root partition usage
+    df -h / | awk 'NR==2 {print "TOTAL:"$2",USED:"$3",FREE:"$4",PERCENT:"$5}'
+}
+
+# Collect system load
+get_system_load() {
+    # Get 1, 5, 15 minute load averages
+    uptime | awk -F'load average:' '{print $2}' | sed 's/ //g'
+}
+
+# Collect uptime
+get_uptime() {
+    uptime -p | sed 's/up //'
+}
+
+# Collect number of processes
+get_process_count() {
+    ps aux | wc -l
+}
+
+# Collect top 5 CPU processes
+get_top_processes() {
+    ps aux --sort=-%cpu | head -n 6 | tail -n 5 | awk '{printf "%s:%s:%s%% ", $11, $2, $3}'
+}
+
+# Collect network information
+get_network_info() {
+    local interface
+    interface=$(ip route | grep default | awk '{print $5}' | head -n1)
+    
+    if [[ -n "$interface" ]]; then
+        local rx_bytes tx_bytes
+        rx_bytes=$(cat /sys/class/net/"$interface"/statistics/rx_bytes 2>/dev/null || echo "0")
+        tx_bytes=$(cat /sys/class/net/"$interface"/statistics/tx_bytes 2>/dev/null || echo "0")
+        echo "INTERFACE:$interface,RX:$(format_bytes $rx_bytes),TX:$(format_bytes $tx_bytes)"
+    else
+        echo "INTERFACE:none,RX:0,TX:0"
+    fi
+}
+
+# Collect all system metrics in JSON format
+collect_all_metrics() {
+    local hostname
+    hostname=$(hostname)
+    local timestamp
+    timestamp=$(get_timestamp)
+    
+    # Build JSON-like output (simple format, can be enhanced with jq)
+    cat <<EOF
+{
+  "hostname": "$hostname",
+  "timestamp": "$timestamp",
+  "cpu_usage": "$(get_cpu_usage)",
+  "memory": "$(get_memory_info)",
+  "disk": "$(get_disk_usage)",
+  "load": "$(get_system_load)",
+  "uptime": "$(get_uptime)",
+  "processes": "$(get_process_count)",
+  "top_processes": "$(get_top_processes)",
+  "network": "$(get_network_info)"
+}
+EOF
+}
+
+# Simple text format for easy display
+collect_metrics_simple() {
+    echo "=== System Metrics: $(hostname) ==="
+    echo "Time: $(get_timestamp)"
+    echo "CPU Usage: $(get_cpu_usage)%"
+    echo "Memory: $(get_memory_info)"
+    echo "Disk: $(get_disk_usage)"
+    echo "Load: $(get_system_load)"
+    echo "Uptime: $(get_uptime)"
+    echo "Processes: $(get_process_count)"
+    echo "Network: $(get_network_info)"
+    echo "=================================="
+}
+
+# Main execution when run directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Check if argument is provided
+    if [[ "$1" == "--json" ]]; then
+        collect_all_metrics
+    else
+        collect_metrics_simple
+    fi
+fi

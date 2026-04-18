@@ -1,0 +1,488 @@
+# E.A.S.E.M Usage Guide
+
+## Enhanced Administration and System Environment Manager
+
+---
+
+## Master Control Commands
+
+### Main Interface
+
+```bash
+cd easem/master
+
+# Show help
+./easem-master.sh help
+
+# Initialize system
+./easem-master.sh init
+
+# Check status
+./easem-master.sh status
+
+# Launch interactive menu
+./easem-master.sh menu
+```
+
+---
+
+## Dashboard & Monitoring
+
+### View All Clients
+
+```bash
+# List all configured clients with status
+./easem-dashboard.sh list
+```
+
+Output shows:
+- Client name
+- Username
+- Host/IP address
+- SSH port
+- Online/Offline status (color-coded)
+
+### Live Monitoring Dashboard
+
+```bash
+# Start live dashboard (auto-refresh every 3 seconds)
+./easem-dashboard.sh live
+```
+
+Shows real-time:
+- CPU usage percentage
+- Memory (total, used, free, percentage)
+- Disk usage
+- System load (1, 5, 15 min averages)
+- Uptime
+- Process count
+- Network interface stats
+
+Press `Ctrl+C` to exit.
+
+### Single Client View
+
+```bash
+# View specific client metrics once
+./easem-dashboard.sh show laptop2
+
+# View all clients once (no auto-refresh)
+./easem-dashboard.sh all
+```
+
+---
+
+## Remote Command Execution
+
+### Execute Single Command
+
+```bash
+# Using master control
+./easem-master.sh exec laptop2 "df -h"
+
+# Using commands script directly
+./easem-commands.sh john 192.168.1.105 "uptime" 22
+```
+
+### Common Commands
+
+```bash
+# Check disk space
+./easem-master.sh exec laptop2 "df -h"
+
+# View running processes
+./easem-master.sh exec laptop2 "ps aux | head -10"
+
+# Check system uptime
+./easem-master.sh exec laptop2 "uptime"
+
+# List installed packages
+./easem-master.sh exec laptop2 "apt list --installed | grep python"
+
+# Check network connections
+./easem-master.sh exec laptop2 "ss -tuln"
+
+# View memory usage
+./easem-master.sh exec laptop2 "free -h"
+```
+
+### Command Validation
+
+For security, commands are validated before execution:
+- Dangerous commands (rm -rf, mkfs, dd, fork bombs) are blocked
+- Commands are logged for audit trail
+- Whitelist system can be customized in `shared/easem-security.sh`
+
+---
+
+## Package Installation
+
+### Install Package on Client
+
+```bash
+# Install single package
+./easem-master.sh install laptop2 htop
+
+# Install multiple packages
+./easem-master.sh exec laptop2 "sudo apt install -y vim git curl"
+```
+
+The system will:
+1. Check if apt is available
+2. Update package list
+3. Install the requested package
+4. Show installation output
+
+---
+
+## Chat Feature
+
+### List Available Chats
+
+```bash
+# Show all clients and unread message count
+./easem-chat.sh list
+```
+
+### Start Chat Session
+
+```bash
+# Start chatting with a client
+./easem-chat.sh start laptop2
+
+# Or using master control
+./easem-master.sh chat laptop2 start
+```
+
+Chat Interface:
+- Messages auto-refresh every 1 second
+- Master messages shown in green
+- Client messages shown in blue
+- Type message and press Enter to send
+
+### Chat Commands
+
+During chat session:
+- `:exit` - Exit chat session
+- `:clear` - Clear screen (keeps history)
+- Any text - Send message
+
+### View Chat History
+
+```bash
+# View last 50 messages
+./easem-chat.sh history laptop2
+
+# View last 100 messages
+./easem-chat.sh history laptop2 100
+```
+
+---
+
+## Client-Side Usage
+
+On client machines, the agent provides local commands:
+
+### Agent Status
+
+```bash
+cd ~/easem/agent
+
+# Show agent status
+./easem-agent.sh status
+```
+
+### View Local Metrics
+
+```bash
+# Display system metrics
+./easem-agent.sh metrics
+
+# Get JSON format
+./easem-collector.sh --json
+```
+
+### Start Chat Client
+
+```bash
+# Start chat interface
+./easem-chat-client.sh start
+
+# View chat history
+./easem-chat-client.sh history
+```
+
+This allows clients to:
+- Initiate conversations with master
+- Respond to messages
+- View message history
+
+---
+
+## Agent Deployment
+
+### Deploy to New Client
+
+```bash
+# Full deployment (name, username, host, port)
+./easem-deploy.sh laptop3 alice 192.168.1.110 22
+
+# Or using master control
+./easem-master.sh deploy laptop3 alice 192.168.1.110
+```
+
+### Setup SSH Keys Only
+
+```bash
+# Setup SSH authentication before deployment
+./easem-deploy.sh --setup-ssh alice 192.168.1.110
+```
+
+---
+
+## Configuration
+
+### Master Configuration
+
+Edit `master/config/easem-config.conf`:
+
+```bash
+# Master settings
+MASTER_NAME="master-control"
+
+# SSH settings
+SSH_KEY_PATH="$HOME/.ssh/id_rsa"
+SSH_TIMEOUT=10
+
+# Refresh intervals
+METRICS_REFRESH_INTERVAL=5
+DASHBOARD_REFRESH_INTERVAL=3
+CHAT_REFRESH_INTERVAL=1
+
+# Logging
+LOG_RETENTION_DAYS=7
+DEBUG_MODE=0  # Set to 1 for verbose logging
+```
+
+### Client List Management
+
+Edit `master/config/clients.list`:
+
+```
+# Format: client_name:username:hostname:port
+laptop2:john:192.168.1.105:22
+laptop3:alice:192.168.1.110:22
+server1:admin:192.168.1.200:22
+```
+
+Add, remove, or modify clients as needed.
+
+---
+
+## Logging
+
+### View Logs
+
+```bash
+# View master logs (last 50 lines)
+./easem-master.sh logs master
+
+# View specific component logs
+./easem-master.sh logs master 100
+
+# View logs directly
+tail -f ../logs/master_$(date +%Y%m%d).log
+```
+
+### Log Types
+
+Logs are created daily in `logs/` directory:
+- `master_YYYYMMDD.log` - Master operations
+- `agent_YYYYMMDD.log` - Agent operations (on clients)
+- `chat_YYYYMMDD.log` - Chat activities
+
+### Clean Old Logs
+
+```bash
+# Logs older than 7 days are kept by default
+# To manually clean logs older than X days:
+find ../logs -name "*.log" -type f -mtime +7 -delete
+```
+
+---
+
+## Interactive Menu
+
+Launch the interactive menu for easy navigation:
+
+```bash
+./easem-master.sh menu
+```
+
+Menu options:
+1. **List Clients** - View all configured clients
+2. **Monitor Dashboard (Live)** - Real-time monitoring
+3. **Execute Command** - Run command on client
+4. **Install Package** - Install software on client
+5. **Chat with Client** - Start chat session
+6. **Deploy Agent** - Deploy to new client
+7. **View Logs** - View system logs
+8. **Status** - Show master status
+9. **Exit** - Quit menu
+
+---
+
+## Common Workflows
+
+### Daily Monitoring
+
+```bash
+# Quick check of all systems
+./easem-dashboard.sh list
+
+# Monitor specific client
+./easem-dashboard.sh show laptop2
+
+# Start live monitoring
+./easem-dashboard.sh live
+```
+
+### System Maintenance
+
+```bash
+# Update all clients
+for client in laptop2 laptop3; do
+    ./easem-master.sh exec $client "sudo apt update && sudo apt upgrade -y"
+done
+
+# Check disk space on all
+./easem-dashboard.sh all | grep -i "disk"
+
+# Restart service on client
+./easem-master.sh exec laptop2 "sudo systemctl restart nginx"
+```
+
+### Communication
+
+```bash
+# List clients with unread messages
+./easem-chat.sh list
+
+# Start chat with client
+./easem-chat.sh start laptop2
+
+# Review conversation history
+./easem-chat.sh history laptop2
+```
+
+### Adding New Client
+
+```bash
+# 1. Setup SSH keys
+./easem-deploy.sh --setup-ssh username host
+
+# 2. Deploy agent
+./easem-deploy.sh clientname username host 22
+
+# 3. Verify connection
+./easem-dashboard.sh show clientname
+
+# 4. Test command execution
+./easem-master.sh exec clientname "whoami"
+```
+
+---
+
+## Tips & Best Practices
+
+1. **SSH Keys:** Always use SSH key authentication for security and automation
+2. **Client Names:** Use descriptive, unique names for easy identification
+3. **Regular Monitoring:** Run live dashboard during demonstrations
+4. **Chat Logs:** Chat history is persistent across sessions
+5. **Command Safety:** Test commands on one client before running on multiple
+6. **Network:** Ensure all machines are on the same network for WSL2 demos
+7. **Backups:** Keep backup of `config/clients.list` and chat logs
+
+---
+
+## Troubleshooting
+
+### Dashboard Shows Offline
+
+```bash
+# Test SSH connection
+ssh username@host "echo OK"
+
+# Check SSH service on client
+ssh username@host "sudo service ssh status"
+
+# Verify client in clients.list
+cat config/clients.list | grep clientname
+```
+
+### Command Execution Fails
+
+```bash
+# Check command validation
+# Ensure command is not in blocked list (see shared/easem-security.sh)
+
+# Test command locally on client first
+ssh username@host "your-command"
+
+# Check logs for errors
+./easem-master.sh logs master
+```
+
+### Chat Not Syncing
+
+```bash
+# Check chat directory exists on both sides
+ls -la ../chat-data/
+ssh username@host "ls -la ~/easem/chat-data/"
+
+# Manually sync test
+scp ../chat-data/chat_*.log username@host:~/easem/chat-data/
+
+# Check network connectivity
+ping host
+```
+
+---
+
+## Advanced Usage
+
+### Custom Command Whitelist
+
+Edit `shared/easem-security.sh` to customize allowed commands:
+
+```bash
+ALLOWED_COMMANDS=(
+    "ls"
+    "pwd"
+    # Add your custom commands here
+    "docker ps"
+    "kubectl get pods"
+)
+```
+
+### Batch Operations
+
+```bash
+# Execute on multiple clients
+for client in laptop2 laptop3 server1; do
+    echo "=== $client ==="
+    ./easem-master.sh exec $client "df -h /"
+done
+```
+
+### Scheduled Monitoring
+
+```bash
+# Add to crontab for periodic checks
+# Check every 5 minutes and log
+*/5 * * * * cd /path/to/easem/master && ./easem-dashboard.sh all >> /tmp/easem-monitor.log
+```
+
+---
+
+For installation instructions, see [INSTALLATION.md](INSTALLATION.md)

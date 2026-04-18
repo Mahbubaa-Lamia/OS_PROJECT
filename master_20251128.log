@@ -1,0 +1,332 @@
+# E.A.S.E.M Installation Guide
+
+## Enhanced Administration and System Environment Manager
+
+### Prerequisites
+
+#### On Master Machine (Control Station):
+- WSL2 with Ubuntu 24.04 LTS (or native Linux)
+- Bash 4.0 or higher
+- OpenSSH client (`openssh-client`)
+- `rsync` (optional but recommended)
+- Network connectivity to client machines
+
+#### On Client Machines (Monitored PCs):
+- WSL2 with Ubuntu 24.04 LTS (or native Linux)
+- Bash 4.0 or higher
+- OpenSSH server (`openssh-server`)
+- Standard Linux utilities (top, free, df, etc.)
+- Network connectivity to master
+
+---
+
+## Installation Steps
+
+### 1. Prepare Master Machine
+
+#### Install Required Packages
+```bash
+# Update package list
+sudo apt update
+
+# Install required packages
+sudo apt install -y openssh-client rsync
+
+# Optional: Install additional tools
+sudo apt install -y jq curl wget
+```
+
+#### Generate SSH Key (if not exists)
+```bash
+# Generate SSH key pair
+ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa
+
+# Press Enter for default location and no passphrase (for automation)
+```
+
+#### Download/Copy E.A.S.E.M
+```bash
+# If you have the easem folder, navigate to it
+cd /path/to/easem
+
+# Make all scripts executable
+chmod +x master/*.sh agent/*.sh shared/*.sh
+```
+
+#### Initialize Master
+```bash
+cd master
+./easem-master.sh init
+```
+
+---
+
+### 2. Prepare Client Machines
+
+#### Install OpenSSH Server
+```bash
+# Update package list
+sudo apt update
+
+# Install OpenSSH server
+sudo apt install -y openssh-server
+
+# Start SSH service
+sudo service ssh start
+
+# Check SSH status
+sudo service ssh status
+```
+
+#### Configure SSH for WSL2
+If using WSL2, you may need to configure SSH to start automatically:
+
+```bash
+# Edit SSH config (optional)
+sudo nano /etc/ssh/sshd_config
+
+# Ensure these settings:
+# PermitRootLogin no
+# PubkeyAuthentication yes
+# PasswordAuthentication yes  # Can disable after key setup
+
+# Restart SSH service
+sudo service ssh restart
+```
+
+#### Find Client IP Address
+```bash
+# Get IP address
+ip addr show | grep inet
+# Or
+hostname -I
+```
+
+---
+
+### 3. Setup SSH Key Authentication
+
+From the **Master machine**, copy your SSH key to each client:
+
+```bash
+# Copy SSH key to client (replace with actual username and IP)
+ssh-copy-id username@192.168.1.100
+
+# Test connection
+ssh username@192.168.1.100 "echo 'Connection successful'"
+```
+
+Alternatively, use the deployment script's SSH setup:
+
+```bash
+cd master
+./easem-deploy.sh --setup-ssh username 192.168.1.100
+```
+
+---
+
+### 4. Deploy Agent to Clients
+
+Use the deployment script to automatically deploy the agent:
+
+```bash
+cd master
+
+# Deploy agent (syntax: client_name username hostname port)
+./easem-deploy.sh laptop2 john 192.168.1.105 22
+
+# Or using the master control
+./easem-master.sh deploy laptop2 john 192.168.1.105
+```
+
+The deployment script will:
+1. Test SSH connection
+2. Create necessary directories on client
+3. Transfer all agent and shared scripts
+4. Set executable permissions
+5. Initialize the agent
+6. Add client to the client list
+
+---
+
+### 5. Verify Installation
+
+#### On Master:
+```bash
+cd master
+
+# Check status
+./easem-master.sh status
+
+# List clients
+./easem-dashboard.sh list
+
+# Test connection to a client
+ssh username@client_ip "cd easem/agent && ./easem-agent.sh status"
+```
+
+#### On Client:
+```bash
+cd ~/easem/agent
+
+# Check agent status
+./easem-agent.sh status
+
+# Test metrics collection
+./easem-agent.sh metrics
+```
+
+---
+
+## Manual Installation (Alternative)
+
+If automatic deployment doesn't work, you can manually install on clients:
+
+### On Client Machine:
+
+```bash
+# Create directory structure
+mkdir -p ~/easem/agent ~/easem/shared ~/easem/chat-data ~/easem/logs
+
+# You'll need to manually copy the files from master:
+# - Copy all files from shared/ to ~/easem/shared/
+# - Copy all files from agent/ to ~/easem/agent/
+
+# Make scripts executable
+chmod +x ~/easem/agent/*.sh ~/easem/shared/*.sh
+
+# Initialize agent
+cd ~/easem/agent
+./easem-agent.sh init
+```
+
+### On Master Machine:
+
+Manually add client to `master/config/clients.list`:
+
+```bash
+# Edit the client list
+nano master/config/clients.list
+
+# Add entry (format: name:username:host:port)
+laptop2:john:192.168.1.105:22
+```
+
+---
+
+## Troubleshooting
+
+### SSH Connection Issues
+
+**Problem:** Cannot connect to client
+
+**Solutions:**
+```bash
+# 1. Check SSH service is running on client
+sudo service ssh status
+sudo service ssh start
+
+# 2. Check firewall (if applicable)
+sudo ufw allow 22/tcp
+sudo ufw reload
+
+# 3. Test basic SSH connection
+ssh -v username@client_ip
+
+# 4. Verify SSH key permissions
+chmod 600 ~/.ssh/id_rsa
+chmod 644 ~/.ssh/id_rsa.pub
+```
+
+### WSL2 Network Issues
+
+**Problem:** Cannot reach WSL2 instance from another machine
+
+**Solutions:**
+```bash
+# 1. Check WSL IP address
+ip addr show eth0
+
+# 2. On Windows, you may need port forwarding
+# Run in Windows PowerShell as Administrator:
+netsh interface portproxy add v4tov4 listenport=22 listenaddress=0.0.0.0 connectport=22 connectaddress=<WSL_IP>
+
+# 3. Check Windows Firewall allows SSH
+```
+
+### Permission Issues
+
+**Problem:** Permission denied errors
+
+**Solutions:**
+```bash
+# Make scripts executable
+chmod +x ~/easem/master/*.sh
+chmod +x ~/easem/agent/*.sh
+chmod +x ~/easem/shared/*.sh
+
+# Fix SSH key permissions
+chmod 600 ~/.ssh/id_rsa
+chmod 700 ~/.ssh
+```
+
+### Metrics Not Showing
+
+**Problem:** Dashboard shows no data
+
+**Solutions:**
+```bash
+# 1. Test collector directly on client
+ssh username@client_ip "cd easem/agent && ./easem-collector.sh"
+
+# 2. Check paths in scripts are correct
+# 3. Verify agent initialization was successful
+
+# 4. Check logs
+cd master
+./easem-master.sh logs master
+```
+
+---
+
+## Quick Setup Script (Optional)
+
+Create a quick setup script for batch installation:
+
+```bash
+#!/bin/bash
+# quick-setup.sh
+
+MASTER_DIR="/path/to/easem/master"
+CLIENTS=(
+    "laptop2:john:192.168.1.105:22"
+    "laptop3:jane:192.168.1.106:22"
+)
+
+cd "$MASTER_DIR"
+
+# Initialize master
+./easem-master.sh init
+
+# Deploy to all clients
+for client in "${CLIENTS[@]}"; do
+    IFS=':' read -r name user host port <<< "$client"
+    echo "Deploying to $name..."
+    ./easem-deploy.sh "$name" "$user" "$host" "$port"
+done
+
+echo "Setup complete!"
+```
+
+---
+
+## Next Steps
+
+After successful installation:
+
+1. **Start Monitoring:** `./easem-master.sh dashboard live`
+2. **Try Commands:** `./easem-master.sh exec <client> "uptime"`
+3. **Start Chat:** `./easem-master.sh chat <client> start`
+4. **Use Interactive Menu:** `./easem-master.sh menu`
+
+See [USAGE.md](USAGE.md) for detailed usage instructions.
