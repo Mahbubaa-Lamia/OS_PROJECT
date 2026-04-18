@@ -1,122 +1,103 @@
 #!/bin/bash
 
-# E.A.S.E.M Chat - Master Side (Working Version)
-# Uses two-file system: incoming.log and outgoing.log
+#############################################
+# E.A.S.E.M - Logging Functions
+# Centralized logging for all components
+#############################################
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHARED_DIR="$SCRIPT_DIR/../shared"
-CONFIG_FILE="$SCRIPT_DIR/config/easem-config.conf"
-CLIENTS_FILE="$SCRIPT_DIR/config/clients.list"
-CHAT_DIR="$SCRIPT_DIR/../chat-data"
+# Source utilities
+_LOGGER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$_LOGGER_DIR/easem-utils.sh"
 
-source "$SHARED_DIR/easem-utils.sh"
-source "$SHARED_DIR/easem-logger.sh"
+# Default log directory
+LOG_DIR="${EASEM_LOG_DIR:-$_LOGGER_DIR/../logs}"
+ensure_dir "$LOG_DIR"
 
-if file_exists "$CONFIG_FILE"; then
-    source "$CONFIG_FILE"
-fi
-
-ensure_dir "$CHAT_DIR"
-
-get_client_info() {
-    grep "^$1:" "$CLIENTS_FILE" | head -1
+# Get log file path for a component
+get_log_file() {
+    local component=$1
+    echo "$LOG_DIR/${component}_$(date '+%Y%m%d').log"
 }
 
-start_chat() {
-    local client_name=$1
-    local client_info=$(get_client_info "$client_name")
+# Write log entry
+write_log() {
+    local level=$1
+    local component=$2
+    local message=$3
+    local log_file
     
-    if [[ -z "$client_info" ]]; then
-        print_error "Client not found: $client_name"
-        return 1
+    log_file=$(get_log_file "$component")
+    echo "[$(get_timestamp)] [$level] $message" >> "$log_file"
+}
+
+# Log info message
+log_info() {
+    local component=$1
+    local message=$2
+    write_log "INFO" "$component" "$message"
+}
+
+# Log error message
+log_error() {
+    local component=$1
+    local message=$2
+    write_log "ERROR" "$component" "$message"
+}
+
+# Log warning message
+log_warning() {
+    local component=$1
+    local message=$2
+    write_log "WARNING" "$component" "$message"
+}
+
+# Log debug message
+log_debug() {
+    local component=$1
+    local message=$2
+    if [[ "${EASEM_DEBUG:-0}" == "1" ]]; then
+        write_log "DEBUG" "$component" "$message"
     fi
-    
-    IFS=':' read -r name user host port <<< "$client_info"
-    
-    # Local conversation log
-    local local_log="$CHAT_DIR/${client_name}_conversation.log"
-    
-    # Remote files on client
-    local remote_incoming="~/.easem/chat/incoming.log"
-    local remote_outgoing="~/.easem/chat/outgoing.log"
-    
-    # Setup remote directory
-    ssh -p "$port" "$user@$host" "mkdir -p ~/.easem/chat && touch ~/.easem/chat/incoming.log ~/.easem/chat/outgoing.log" 2>/dev/null
-    
-    touch "$local_log"
-    
-    echo ""
-    echo "════════════════════════════════════════════════════════"
-    echo "  Chat: $client_name @ $host"
-    echo "════════════════════════════════════════════════════════"
-    echo "  Commands: r=refresh, exit=quit"
-    echo ""
-    read -p "Press Enter to start..."
-    
-    while true; do
-        # Pull new messages from client (their outgoing = our incoming)
-        local new_msgs=$(ssh -p "$port" "$user@$host" "cat ~/.easem/chat/outgoing.log 2>/dev/null" 2>/dev/null)
-        
-        if [[ -n "$new_msgs" ]]; then
-            echo "$new_msgs" >> "$local_log"
-            # Clear their outgoing after reading
-            ssh -p "$port" "$user@$host" "> ~/.easem/chat/outgoing.log" 2>/dev/null
-        fi
-        
-        # Display conversation
-        clear
-        echo "════════════════════════════════════════════════════════"
-        echo "  Chat: $client_name"
-        echo "════════════════════════════════════════════════════════"
-        echo ""
-        
-        if [[ -s "$local_log" ]]; then
-            tail -n 25 "$local_log"
-        else
-            echo "  [No messages]"
-        fi
-        
-        echo ""
-        echo "────────────────────────────────────────────────────────"
-        echo -n "You: "
-        
-        read -r msg
-        
-        case "$msg" in
-            exit|quit|q)
-                echo "Chat closed."
-                break
-                ;;
-            r|refresh|"")
-                continue
-                ;;
-            *)
-                local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-                local formatted="[$timestamp] admin: $msg"
-                
-                # Send to client (write to their incoming)
-                echo "$formatted" | ssh -p "$port" "$user@$host" "cat >> ~/.easem/chat/incoming.log" 2>/dev/null
-                
-                # Log locally
-                echo "$formatted" >> "$local_log"
-                ;;
-        esac
-    done
 }
 
-case "${1:-help}" in
-    start)
-        if [[ -z "$2" ]]; then
-            print_error "Usage: $0 start <client_name>"
-            exit 1
-        fi
-        start_chat "$2"
-        ;;
-    list)
-        grep -v '^#' "$CLIENTS_FILE" | grep -v '^$' | cut -d':' -f1
-        ;;
-    *)
-        echo "E.A.S.E.M Chat"
-        echo "Usage: $0 start <client_name>"
-        ;;
-esac
+# Log command execution
+log_command() {
+    local component=$1
+    local user=$2
+    local command=$3
+    local result=$4
+    write_log "COMMAND" "$component" "User: $user | Command: $command | Result: $result"
+}
+
+# View logs for a component
+view_logs() {
+    local component=$1
+    local lines=${2:-50}
+    local log_file
+    
+    log_file=$(get_log_file "$component")
+    if file_exists "$log_file"; then
+        tail -n "$lines" "$log_file"
+    else
+        print_warning "No log file found for component: $component"
+    fi
+}
+
+# Clean old logs (older than X days)
+clean_old_logs() {
+    local days=${1:-7}
+    print_info "Cleaning logs older than $days days..."
+    find "$LOG_DIR" -name "*.log" -type f -mtime +"$days" -delete
+    print_success "Old logs cleaned"
+}
+
+# Export functions
+export -f get_log_file
+export -f write_log
+export -f log_info
+export -f log_error
+export -f log_warning
+export -f log_debug
+export -f log_command
+export -f view_logs
+export -f clean_old_logs
