@@ -1,158 +1,161 @@
 #!/bin/bash
 
 #############################################
-# E.A.S.E.M - Remote Command Executor
-# Execute commands on remote clients
+# E.A.S.E.M - Security Functions
+# Input validation and security checks
 #############################################
 
-# Source shared utilities
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHARED_DIR="$SCRIPT_DIR/../shared"
-CONFIG_FILE="$SCRIPT_DIR/config/easem-config.conf"
+# Source utilities
+_SECURITY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$_SECURITY_DIR/easem-utils.sh"
 
-source "$SHARED_DIR/easem-utils.sh"
-source "$SHARED_DIR/easem-logger.sh"
-source "$SHARED_DIR/easem-security.sh"
+# Whitelist of allowed commands (can be customized)
+ALLOWED_COMMANDS=(
+    "ls"
+    "pwd"
+    "whoami"
+    "hostname"
+    "uptime"
+    "df"
+    "free"
+    "top"
+    "ps"
+    "netstat"
+    "ss"
+    "date"
+    "cat"
+    "grep"
+    "systemctl status"
+    "apt list --installed"
+    "apt update"
+    "apt install"
+    "apt remove"
+    "sudo systemctl"
+)
 
-# Load configuration
-if file_exists "$CONFIG_FILE"; then
-    source "$CONFIG_FILE"
-fi
-
-# Execute command on remote client
-execute_remote_command() {
-    local client_user=$1
-    local client_host=$2
-    local command=$3
-    local ssh_port=${4:-22}
-    
-    # Validate inputs
-    if ! validate_ssh_params "$client_user" "$client_host"; then
-        return 1
-    fi
-    
-    if ! validate_command "$command"; then
-        print_error "Command validation failed"
-        return 1
-    fi
-    
-    print_info "Executing on $client_host: $command"
-    log_command "master" "$MASTER_USER" "$client_host:$command" "attempting"
-    
-    # Execute via SSH
-    local output
-    local exit_code
-    output=$(ssh $SSH_OPTIONS -p "$ssh_port" "$client_user@$client_host" "$command" 2>&1)
-    exit_code=$?
-    
-    if [[ $exit_code -eq 0 ]]; then
-        print_success "Command executed successfully"
-        log_command "master" "$MASTER_USER" "$client_host:$command" "success"
-        echo "$output"
-    else
-        print_error "Command failed with exit code: $exit_code"
-        log_command "master" "$MASTER_USER" "$client_host:$command" "failed:$exit_code"
-        echo "$output"
-    fi
-    
-    return $exit_code
-}
-
-# Execute command on multiple clients
-execute_on_multiple() {
+# Check if command is in whitelist
+is_command_allowed() {
     local command=$1
-    shift
-    local clients=("$@")
+    local cmd_base
+    cmd_base=$(echo "$command" | awk '{print $1}')
     
-    print_info "Executing command on ${#clients[@]} client(s)"
-    
-    for client_spec in "${clients[@]}"; do
-        IFS=':' read -r name user host port <<< "$client_spec"
-        echo ""
-        print_color "$COLOR_CYAN" "=== Client: $name ($host) ==="
-        execute_remote_command "$user" "$host" "$command" "$port"
+    # Check if it's a whitelisted command
+    for allowed in "${ALLOWED_COMMANDS[@]}"; do
+        if [[ "$command" == "$allowed"* ]] || [[ "$cmd_base" == "$allowed" ]]; then
+            return 0
+        fi
     done
+    
+    return 1
 }
 
-# Get metrics from remote client
-get_remote_metrics() {
-    local client_user=$1
-    local client_host=$2
-    local ssh_port=${3:-22}
-    local format=${4:-"simple"}
+# Validate and sanitize command input
+validate_command() {
+    local command=$1
     
-    local remote_script="~/easem/agent/easem-collector.sh"
-    local flag=""
-    
-    if [[ "$format" == "json" ]]; then
-        flag="--json"
-    fi
-    
-    # Execute collector script on remote
-    ssh $SSH_OPTIONS -p "$ssh_port" "$client_user@$client_host" "cd ~/easem/agent && ./easem-collector.sh $flag" 2>/dev/null
-}
-
-# Install package on remote client
-install_package() {
-    local client_user=$1
-    local client_host=$2
-    local package=$3
-    local ssh_port=${4:-22}
-    
-    print_info "Installing package '$package' on $client_host"
-    
-    # Check if apt is available
-    local has_apt
-    has_apt=$(ssh $SSH_OPTIONS -p "$ssh_port" "$client_user@$client_host" "command -v apt" 2>/dev/null)
-    
-    if [[ -z "$has_apt" ]]; then
-        print_error "Package manager 'apt' not found on remote system"
+    # Check for empty command
+    if [[ -z "$command" ]]; then
+        print_error "Empty command not allowed"
         return 1
     fi
     
-    # Update package list
-    print_info "Updating package list..."
-    execute_remote_command "$client_user" "$client_host" "sudo apt update" "$ssh_port"
-    
-    # Install package
-    print_info "Installing $package..."
-    execute_remote_command "$client_user" "$client_host" "sudo apt install -y $package" "$ssh_port"
-}
-
-# Transfer file to remote client
-transfer_file() {
-    local local_file=$1
-    local client_user=$2
-    local client_host=$3
-    local remote_path=$4
-    local ssh_port=${5:-22}
-    
-    if ! file_exists "$local_file"; then
-        print_error "Local file not found: $local_file"
+    # Check for dangerous patterns
+    if [[ "$command" =~ (rm\s+-rf|mkfs|dd|:(){|fork|bomb) ]]; then
+        print_error "Dangerous command pattern detected"
         return 1
     fi
     
-    print_info "Transferring $local_file to $client_host:$remote_path"
+    # Check if command contains pipe to shell
+    if [[ "$command" =~ (\||bash|sh|exec) ]]; then
+        print_warning "Command contains potentially dangerous operators"
+        # Allow but log it
+    fi
     
-    scp -P "$ssh_port" $SSH_OPTIONS "$local_file" "$client_user@$client_host:$remote_path" 2>/dev/null
-    
-    if [[ $? -eq 0 ]]; then
-        print_success "File transferred successfully"
-        log_info "master" "File transferred: $local_file -> $client_host:$remote_path"
+    return 0
+}
+
+# Sanitize filename (for chat logs, etc)
+sanitize_filename() {
+    local filename=$1
+    # Remove path traversal attempts and special characters
+    echo "$filename" | sed 's/[^a-zA-Z0-9._-]/_/g'
+}
+
+# Validate client name
+validate_client_name() {
+    local name=$1
+    # Only allow alphanumeric, dash, underscore
+    if [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
         return 0
     else
-        print_error "File transfer failed"
-        log_error "master" "File transfer failed: $local_file -> $client_host:$remote_path"
+        print_error "Invalid client name. Only letters, numbers, dash and underscore allowed."
         return 1
     fi
 }
 
-# Main execution when run directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    if [[ $# -lt 3 ]]; then
-        echo "Usage: $0 <user> <host> <command> [port]"
-        exit 1
+# Check SSH key permissions (should be 600)
+check_ssh_key_permissions() {
+    local key_file=$1
+    
+    if ! file_exists "$key_file"; then
+        print_error "SSH key not found: $key_file"
+        return 1
     fi
     
-    execute_remote_command "$1" "$2" "$3" "${4:-22}"
-fi
+    local perms
+    perms=$(stat -c "%a" "$key_file" 2>/dev/null || stat -f "%A" "$key_file" 2>/dev/null)
+    
+    if [[ "$perms" != "600" ]]; then
+        print_warning "SSH key has incorrect permissions: $perms (should be 600)"
+        chmod 600 "$key_file"
+        print_success "Fixed SSH key permissions to 600"
+    fi
+    
+    return 0
+}
+
+# Validate SSH connection parameters
+validate_ssh_params() {
+    local user=$1
+    local host=$2
+    
+    # Validate username
+    if [[ ! "$user" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+        print_error "Invalid username format"
+        return 1
+    fi
+    
+    # Validate hostname/IP
+    if ! validate_ip "$host" && [[ ! "$host" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+        print_error "Invalid hostname or IP address"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Create secure temporary file
+create_secure_temp() {
+    local prefix=${1:-"easem"}
+    mktemp -t "${prefix}.XXXXXXXXXX"
+}
+
+# Secure delete file (overwrite before delete)
+secure_delete() {
+    local file=$1
+    if file_exists "$file"; then
+        # Overwrite with random data
+        dd if=/dev/urandom of="$file" bs=1k count=1 2>/dev/null
+        rm -f "$file"
+    fi
+}
+
+# Export functions
+export -f is_command_allowed
+export -f validate_command
+export -f sanitize_filename
+export -f validate_client_name
+export -f check_ssh_key_permissions
+export -f validate_ssh_params
+export -f create_secure_temp
+export -f secure_delete
